@@ -1,0 +1,102 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:14-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: cloudforge
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  backend:
+    build: ./backend
+    ports:
+      - "45000:5000"
+    environment:
+      - FLASK_ENV=development
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/cloudforge
+      - SECRET_KEY=change-me-in-production-supersecret
+      - JWT_SECRET_KEY=change-me-jwt-secret-in-production
+      - AWS_DEFAULT_REGION=us-east-1
+      - JENKINS_URL=http://jenkins:8080
+      - JENKINS_USER=admin
+      - JENKINS_TOKEN=changeme
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "48080:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "49090:9090"
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana
+    ports:
+      - "43000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: node-exporter
+    restart: unless-stopped
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.rootfs=/rootfs'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    ports:
+      - "49100:9100"
+
+  # Local Jenkins for testing (Optional)
+  jenkins:
+    build: ./jenkins
+    ports:
+      - "48081:8080"
+      - "45001:50000"
+    environment:
+      - CASC_JENKINS_CONFIG=/var/jenkins_home/casc_configs/jenkins-casc.yaml
+      - JAVA_OPTS=-Djenkins.install.runSetupWizard=false
+    volumes:
+      - jenkins_home:/var/jenkins_home
+      - ./jenkins/jenkins-casc.yaml:/var/jenkins_home/casc_configs/jenkins-casc.yaml
+      - ./jenkins/Jenkinsfile.deploy:/var/jenkins_home/Jenkinsfile.deploy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  jenkins_home:
+
